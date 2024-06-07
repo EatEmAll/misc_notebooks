@@ -3,6 +3,7 @@
 #%%
 # import dependencies
 import itertools
+import time
 from collections import Counter
 from typing import List
 
@@ -248,6 +249,7 @@ def val_model(X, y, clf, scoring, **cross_val_args):
     """
 
     # convert variables to arrays
+    t_start = time.time()
     X = np.array(X)
     y = np.array(y)
 
@@ -260,7 +262,8 @@ def val_model(X, y, clf, scoring, **cross_val_args):
     ## according to the Recall value
     scores = cross_val_score(pipeline, X, y, n_jobs=-1, scoring=scoring, **cross_val_args)
 
-    print(f"{scoring}: {scores.mean():.4f} (+/- {scores.std():.2f})")
+    run_time_str = time.strftime("%H:%M:%S", time.gmtime(time.time() - t_start))
+    print(f"{scoring}: {scores.mean():.4f} (+/- {scores.std():.2f}), Time: {run_time_str}")
     # return the average of the Recall values obtained in cross-validation
     return scores.mean()
 #%%
@@ -269,12 +272,12 @@ rf = RandomForestClassifier()
 
 # evaluate model performance with the 'val_model' function
 micro_baseline = val_model(X_train, y_train, rf, scoring='recall_micro', cv=3)
-#%%
-### Data standardization and balancing
-scaler = StandardScaler()
-X_train = scaler.fit_transform(X_train)
-X_train_rus, y_train_rus = RandomUnderSampler(random_state=SEED).fit_resample(X_train, y_train)
-print(pd.Series(y_train_rus).value_counts())
+# #%%
+# ### Data standardization and balancing
+# scaler = StandardScaler()
+# X_train = scaler.fit_transform(X_train)
+# X_train_rus, y_train_rus = RandomUnderSampler(random_state=SEED).fit_resample(X_train, y_train)
+# print(pd.Series(y_train_rus).value_counts())
 #%%
 ### Compare models
 # instantiate the models
@@ -293,6 +296,10 @@ model = []
 ## the value of the Recall
 recall = []
 
+# for practical reasons, we'll train on a subset of the data to reduce training time
+n_samples = 10000
+X_train_reduced, y_train_reduced = X_train[:n_samples], y_train[:n_samples]
+
 # create loop to cycle through classification models
 for clf in tqdm((rf, knn, dt, sgdc, svc, lr, xgb, lgbm)):
 
@@ -300,7 +307,7 @@ for clf in tqdm((rf, knn, dt, sgdc, svc, lr, xgb, lgbm)):
     model.append(clf.__class__.__name__)
 
     # apply 'val_model' function and store the obtained Recall value
-    recall.append(val_model(X_train_rus, y_train_rus, clf, scoring='recall'))
+    recall.append(val_model(X_train_reduced, y_train_reduced, clf, scoring='recall_micro'))
 
 # save the Recall result obtained in each classification model in a variable
 results = pd.DataFrame(data=recall, index=model, columns=['Recall'])
@@ -311,9 +318,9 @@ results.sort_values(by='Recall', ascending=False)
 def xgb_hyperparam_search(X, y, param_grid, **xgb_args):
     # set the learning rate to 0.1 and set the seed
     xgb = XGBClassifier(**xgb_args)
-    # set up cross validation with 10 stratified folds
+    # set up cross validation with 5 stratified folds
     # shuffle=True to shuffle the data before splitting and setting the seed
-    kfold = StratifiedKFold(n_splits=10, shuffle=True, random_state=SEED)
+    kfold = StratifiedKFold(shuffle=True, random_state=SEED)
     # configuring the search for cross matches with the XGBoost classifier
     grid_search = GridSearchCV(xgb, param_grid, scoring="recall", n_jobs=-1, cv=kfold)
     grid_result = grid_search.fit(X, y)
