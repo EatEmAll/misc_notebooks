@@ -1,8 +1,11 @@
 #%%
 # TODO: add pip install command for all dependencies
+#!conda install -c conda-forge scikit-learn lightgbm langcodes prince xgboost
 #%%
 # import dependencies
 import itertools
+import json
+import os
 import time
 from collections import Counter
 from typing import List
@@ -15,14 +18,14 @@ from lightgbm import LGBMClassifier
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.linear_model import SGDClassifier, LogisticRegression
 from sklearn.model_selection import train_test_split, cross_val_score, StratifiedKFold, GridSearchCV
+from sklearn.multiclass import OneVsRestClassifier
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import MultiLabelBinarizer, StandardScaler
 import langcodes
 from prince import MCA
-from sklearn.svm import SVC
+from sklearn.svm import LinearSVC
 from sklearn.tree import DecisionTreeClassifier
-from tqdm import tqdm
 from transformers import AutoModel, AutoTokenizer
 from tqdm import tqdm
 import torch
@@ -33,8 +36,15 @@ SEED = 123
 np.random.seed(SEED)
 torch.manual_seed(SEED)
 #%%
-data_path = 'data/movie_data.csv'
-df = pd.read_csv(data_path)
+data_json_path = 'data/movie_data.json'
+data_csv_path = 'data/movie_data.csv'
+if not os.path.exists(data_csv_path):
+    with open(data_json_path, 'r') as f:
+        data = list(map(json.loads, f.readlines()))
+        df = pd.DataFrame(data)
+        df.to_csv(data_csv_path, index=False)
+else:
+    df = pd.read_csv(data_csv_path)
 #%%
 # print columns types, shape, missing values ratio, value counts
 print(df.info())
@@ -231,7 +241,14 @@ X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=.25,
                                                     # stratify=y,
                                                     shuffle=True,
                                                     random_state=SEED)
-print(f'{X_train.shape=}, {y_train.shape=} {X_test.shape=}, {y_test.shape=}')
+
+print(f'{X_train.shape=}, {y_train.shape=} {X_test.shape=}, {y_test.shape=}'
+#%%
+### Data standardization and balancing
+scaler = StandardScaler()
+X_train = scaler.fit_transform(X_train)
+X_train_rus, y_train_rus = RandomUnderSampler(random_state=SEED).fit_resample(X_train, y_train)
+print(pd.Series(y_train_rus).value_counts())
 #%%
 # build model evaluation function
 def val_model(X, y, clf, scoring, **cross_val_args):
@@ -284,15 +301,16 @@ micro_baseline = val_model(X_train, y_train, rf, scoring='recall_micro', cv=3)
 rf   = RandomForestClassifier()
 knn  = KNeighborsClassifier()
 dt   = DecisionTreeClassifier()
-sgdc = SGDClassifier()
-svc  = SVC()
-lr   = LogisticRegression()
+# models that don't support multilabel classification can be wrapped in OneVsRestClassifier
+sgdc = OneVsRestClassifier(SGDClassifier())
+svc  = OneVsRestClassifier(LinearSVC(multi_class='ovr'))
+lr   = OneVsRestClassifier(LogisticRegression())
 xgb  = XGBClassifier()
-lgbm = LGBMClassifier()
-
+lgbm = OneVsRestClassifier(LGBMClassifier())
+classifiers = [rf, knn, dt, sgdc, svc, lr, xgb, lgbm]
 # create lists to store:
 ## the classifier model
-model = []
+# model = []
 ## the value of the Recall
 recall = []
 
@@ -301,16 +319,18 @@ n_samples = 10000
 X_train_reduced, y_train_reduced = X_train[:n_samples], y_train[:n_samples]
 
 # create loop to cycle through classification models
-for clf in tqdm((rf, knn, dt, sgdc, svc, lr, xgb, lgbm)):
-
+# for clf in tqdm(classifiers):
+for clf in tqdm((sgdc, svc, lr, xgb, lgbm)):
     # identify the classifier
-    model.append(clf.__class__.__name__)
-
+    # estimator = clf
+    # if isinstance(clf, OneVsRestClassifier):
+    #     estimator = clf.estimator
+    # model.append(estimator.__class__.__name__)
     # apply 'val_model' function and store the obtained Recall value
     recall.append(val_model(X_train_reduced, y_train_reduced, clf, scoring='recall_micro'))
 
 # save the Recall result obtained in each classification model in a variable
-results = pd.DataFrame(data=recall, index=model, columns=['Recall'])
+results = pd.DataFrame(data=recall, index=map(repr, classifiers), columns=['Recall'])
 
 # show the models based on the Recall value obtained, from highest to lowest
 results.sort_values(by='Recall', ascending=False)
@@ -325,3 +345,36 @@ def xgb_hyperparam_search(X, y, param_grid, **xgb_args):
     grid_search = GridSearchCV(xgb, param_grid, scoring="recall", n_jobs=-1, cv=kfold)
     grid_result = grid_search.fit(X, y)
     return grid_result.best_score_, grid_result.best_params_
+
+#%%
+# search n_estimators
+params_grid = {'n_estimators':range(0,500,50)}
+xgb_args = {'learning_rate':0.1, 'random_state':SEED}
+best_score, best_params = xgb_hyperparam_search(X_train_reduced, y_train_reduced, params_grid, **xgb_args)
+print(f'best params: {best_score=:.4f}, {best_params=:.4f}')
+#%%
+# Extract the best n_estimators from the previous search
+best_n_estimators = best_params['n_estimators']
+# Refine search for n_estimators with a narrower range around the best value found
+narrow_range_start = max(0, best_n_estimators - 25)
+narrow_range_end = best_n_estimators + 25
+params_grid = {'n_estimators': range(narrow_range_start, narrow_range_end, 5)}
+best_score, best_params = xgb_hyperparam_search(X_train_reduced, y_train_reduced, params_grid, **xgb_args)
+print(f'Refined best params: {best_score=:.4f}, {best_params}')
+#%%
+# Search for max_depth and min_child_weight
+params_grid = {'max_depth': range(1, 8, 1),
+               'min_child_weight': range(1, 5, 1)}
+best_score, best_params = xgb_hyperparam_search(X_train_reduced, y_train_reduced, params_grid, **xgb_args)
+print(f'Final best params: {best_score=:.4f}, {best_params}')
+#%%
+# instantiate the model with the best hyperparameters
+xgb_best = XGBClassifier(learning_rate=0.1, n_estimators=best_n_estimators, max_depth=best_params['max_depth'],
+                         min_child_weight=best_params['min_child_weight'], random_state=SEED)
+xgb_best.fit(X_train, y_train)
+#%%
+# standardize test data
+X_test = scaler.transform(X_test)
+# make predictions with test data
+y_pred = xgb.predict(X_test)
+print(classification_report(y_test, y_pred, digits=4))

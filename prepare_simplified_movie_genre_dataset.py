@@ -1,4 +1,5 @@
 """Preprocess a simplified version of movies_data.csv that contains only the plot_summary and genres columns."""
+import json
 from argparse import ArgumentParser
 
 import pandas as pd
@@ -17,7 +18,12 @@ if __name__ == '__main__':
     parser.add_argument('--pipeline_path', type=str, help='Path to save the preprocessing pipeline', default='models/preprocessing_pipeline.pkl')
     args = parser.parse_args()
     # Load data
-    df = pd.read_csv(args.data_path)
+    if args.data_path.endswith('.json'):
+        with open(args.data_path) as f:
+            rows = list(map(json.loads, f.readlines()))
+            df = pd.DataFrame(rows)
+    else:
+        df = pd.read_csv(args.data_path)
     df = df[['plot_summary', 'genres']]
 
     # Pipeline for preprocessing

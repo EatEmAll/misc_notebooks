@@ -1,3 +1,4 @@
+import json
 from argparse import ArgumentParser
 
 import pandas as pd
@@ -10,13 +11,18 @@ from preprocessing_transformers import ParseJsonColumns, ConvertToLangCodes, Cle
 if __name__ == '__main__':
     parser = ArgumentParser()
     # add positional argument for data_path
-    parser.add_argument('data_path', type=str, help='Path to the movie data CSV file')
+    parser.add_argument('data_path', type=str, help='Path to the movie data csv/json file')
     parser.add_argument('processed_data_path', type=str, help='Path to the processed movie data CSV file')
     parser.add_argument('--pipeline_path', type=str, help='Path to save the preprocessing pipeline',
                         default='models/preprocessing_pipeline.pkl')
     args = parser.parse_args()
     # Load data
-    df = pd.read_csv(args.data_path)
+    if args.data_path.endswith('.json'):
+        with open(args.data_path) as f:
+            rows = list(map(json.loads, f.readlines()))
+            df = pd.DataFrame(rows)
+    else:
+        df = pd.read_csv(args.data_path)
 
     # Pipeline for preprocessing
     preprocessing_pipeline = Pipeline(steps=[
