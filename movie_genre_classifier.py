@@ -1,19 +1,22 @@
 #%%
 # TODO: add pip install command for all dependencies
-#!conda install -c conda-forge scikit-learn lightgbm langcodes prince xgboost
+# install dependencies
+#!conda install -c conda-forge scikit-learn lightgbm langcodes prince xgboost imblearn skmultilearn transformers pytorch -y
 #%%
 # import dependencies
 import itertools
 import json
 import os
 import time
-from collections import Counter
 from typing import List
 
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 from imblearn.under_sampling import RandomUnderSampler
+from imblearn.over_sampling import RandomOverSampler
+from sklearn.metrics import classification_report
+from skmultilearn.problem_transform import LabelPowerset
 from lightgbm import LGBMClassifier
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.linear_model import SGDClassifier, LogisticRegression
@@ -69,6 +72,10 @@ for col in str_cols:
     # print number of unique values
     print(f'{col}: {df[col].nunique()}')
 #%%
+n_rows = df.shape[0]
+df.dropna(subset=['genres'], how='any', inplace=True)
+print(f'dropped {n_rows - df.shape[0]} rows')
+#%%
 # parse json columns & extract categorical attributes
 # even though the keys aren't human readable, the values are
 # we'll convert the dicts to lists of values
@@ -88,9 +95,9 @@ for col in json_cols:
 parsed_json_cols = [f'{col}_parsed' for col in json_cols]
 print(df[parsed_json_cols].head())
 #%%
-# drop all rows where y is missing
+# drop all rows where y is empty list
 n_rows = df.shape[0]
-df.dropna(subset=['genres_parsed'], inplace=True)
+df = df[df.genres_parsed.apply(len) > 0]
 print(f'dropped {n_rows - df.shape[0]} rows')
 #%%
 # print unique values in each of the parsed json columns
@@ -126,12 +133,14 @@ for col in cat_multi_cols:
 #%%
 #### using one hot encoding will add additional 296 attributes to the dataset, we can use MCA to encode these attributes at a lower dimensionality
 # we'll start with one hot encoding and use MCA to reduce the dimensionality
+df_bak = df.copy()
+# df = df_bak.copy()
 n_features = df.shape[1]
 one_hot_cols = []
 for col in cat_multi_cols:
     mlb = MultiLabelBinarizer()
     encoded_col = mlb.fit_transform(df[col])
-    encoded_df = pd.DataFrame(encoded_col, columns=[f'{col}_{v}' for v in mlb.classes_])
+    encoded_df = pd.DataFrame(encoded_col, columns=[f'{col}_{v}' for v in mlb.classes_], index=df.index)
     one_hot_cols.extend(encoded_df.columns)
     df = pd.concat([df, encoded_df], axis=1)
     df.drop(col, axis=1, inplace=True)
@@ -139,7 +148,8 @@ for col in cat_multi_cols:
 print(f'{df.shape=}, {df.shape[1] - n_features} new features added')
 #%%
 # find best number of components for MCA
-n_components_candidates = [int(len(one_hot_cols)*ratio) for ratio in (.5, .7, .8, .9)]
+n_components_ratio_candidates = (.5, .7, .8, .9)
+n_components_candidates = [int(len(one_hot_cols)*ratio) for ratio in n_components_ratio_candidates]
 cumulative_eigenvalues = []
 for n_components in tqdm(n_components_candidates, desc='fitting MCA'):
     mca = MCA(n_components=n_components)
@@ -147,7 +157,9 @@ for n_components in tqdm(n_components_candidates, desc='fitting MCA'):
     cumulative_eigenvalues.append(mca.eigenvalues_.sum())
 # plot cumulative eigenvalues
 plt.figure(figsize=(10, 5))
-plt.plot(n_components_candidates, cumulative_eigenvalues)
+plt.plot(n_components_ratio_candidates, cumulative_eigenvalues)
+plt.xlabel('n_components_ratio_candidates')
+plt.ylabel('cumulative_eigenvalues')
 plt.show()
 #%%
 # int(len(one_hot_cols)*.8) gives .95 of the explained variance
@@ -233,22 +245,38 @@ df.to_csv('data/movie_data_processed.csv', index=False)
 # split dataset
 df_shuffled = df.sample(frac=1, random_state=SEED)
 y_cols = df_shuffled.columns[df_shuffled.columns.str.startswith('genres_parsed_')]
-X = df_shuffled.drop(y_cols, axis=1)
-y = df_shuffled[y_cols]
+X = df_shuffled.drop(y_cols, axis=1).values
+y = df_shuffled[y_cols].values
 print(f'{X.shape=}, {y.shape=}')
 # we'll use train_test_split default 0.25 test size
-X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=.25,
+X_train, X_test, y_train, y_test = train_test_split(X, y,
+                                                    test_size=.25,
                                                     # stratify=y,
                                                     shuffle=True,
                                                     random_state=SEED)
 
-print(f'{X_train.shape=}, {y_train.shape=} {X_test.shape=}, {y_test.shape=}'
+print(f'{X_train.shape=}, {y_train.shape=} {X_test.shape=}, {y_test.shape=}')
 #%%
-### Data standardization and balancing
+### Data standardization
 scaler = StandardScaler()
 X_train = scaler.fit_transform(X_train)
-X_train_rus, y_train_rus = RandomUnderSampler(random_state=SEED).fit_resample(X_train, y_train)
-print(pd.Series(y_train_rus).value_counts())
+# X_train_rus, y_train_rus = RandomUnderSampler(random_state=SEED).fit_resample(X_train, y_train)
+# print(pd.Series(y_train_rus).value_counts())
+#%%
+### Data balancing
+# Since we're dealing with multilabel classification,
+# Well need to encode y into 1D array before applying RandomUnderSampler.
+# I chose to go with under sampling rather than over sampling.
+
+lp = LabelPowerset()
+rus = RandomUnderSampler(random_state=SEED)
+# ros = RandomOverSampler(random_state=SEED)
+
+# Applies the above stated multi-label (ML) to multi-class (MC) transformation.
+yt = lp.transform(y_train)
+X_resampled, y_resampled = rus.fit_resample(X_train, yt)
+# Inverts the ML-MC transformation to recreate the ML set
+y_resampled = lp.inverse_transform(y_resampled)
 #%%
 # build model evaluation function
 def val_model(X, y, clf, scoring, **cross_val_args):
@@ -288,13 +316,7 @@ def val_model(X, y, clf, scoring, **cross_val_args):
 rf = RandomForestClassifier()
 
 # evaluate model performance with the 'val_model' function
-micro_baseline = val_model(X_train, y_train, rf, scoring='recall_micro', cv=3)
-# #%%
-# ### Data standardization and balancing
-# scaler = StandardScaler()
-# X_train = scaler.fit_transform(X_train)
-# X_train_rus, y_train_rus = RandomUnderSampler(random_state=SEED).fit_resample(X_train, y_train)
-# print(pd.Series(y_train_rus).value_counts())
+micro_baseline = val_model(X_resampled, y_resampled, rf, scoring='recall_micro', cv=3)
 #%%
 ### Compare models
 # instantiate the models
@@ -315,8 +337,8 @@ classifiers = [rf, knn, dt, sgdc, svc, lr, xgb, lgbm]
 recall = []
 
 # for practical reasons, we'll train on a subset of the data to reduce training time
-n_samples = 10000
-X_train_reduced, y_train_reduced = X_train[:n_samples], y_train[:n_samples]
+n_samples = 6000
+X_train_reduced, y_train_reduced = X_resampled[:n_samples], y_resampled[:n_samples]
 
 # create loop to cycle through classification models
 # for clf in tqdm(classifiers):
@@ -333,7 +355,7 @@ for clf in tqdm((sgdc, svc, lr, xgb, lgbm)):
 results = pd.DataFrame(data=recall, index=map(repr, classifiers), columns=['Recall'])
 
 # show the models based on the Recall value obtained, from highest to lowest
-results.sort_values(by='Recall', ascending=False)
+print(results.sort_values(by='Recall', ascending=False))
 #%%
 def xgb_hyperparam_search(X, y, param_grid, **xgb_args):
     # set the learning rate to 0.1 and set the seed
