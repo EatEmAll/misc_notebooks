@@ -1,11 +1,13 @@
 import itertools
-from typing import List
+from typing import List, Any
 
 import pandas as pd
+from imblearn.under_sampling import RandomUnderSampler
 from sklearn.preprocessing import MultiLabelBinarizer
 from sklearn.base import BaseEstimator, TransformerMixin
 import langcodes
 from prince import MCA
+from skmultilearn.problem_transform import LabelPowerset
 from tqdm import tqdm
 from transformers import AutoModel, AutoTokenizer
 import torch
@@ -94,6 +96,28 @@ class EncodeMultiLabel(BaseEstimator, TransformerMixin):
         return X
 
 
+class MultilabelUnderSampler(BaseEstimator, TransformerMixin):
+    """Custom transformer for balancing multilabel data using under-sampling"""
+    def __init__(self, columns: List[str] = (), cols_prefix: str = ''):
+        if not (len(columns) > 0 or cols_prefix):
+            raise ValueError("At least one of columns or cols_prefix must be provided.")
+        self.columns = columns
+        self.cols_prefix = cols_prefix
+        self.lp = LabelPowerset()
+        self.rus = RandomUnderSampler()
+
+    def fit(self, X: pd.DataFrame, y=None):
+        if len(self.columns) == 0:
+            self.columns = [col for col in X.columns if col.startswith(self.cols_prefix)]
+
+    def transform(self, X: pd.DataFrame, y=None) -> pd.DataFrame:
+        y = X[self.columns]
+        X = X.drop(self.columns, axis=1)
+        X_resampled, y_resampled = self.rus.fit_resample(X, y)
+        y_resampled = self.lp.inverse_transform(y_resampled).toarray()
+        return pd.concat([X_resampled, y_resampled], axis=1)
+
+
 class TextEmbeddings(BaseEstimator, TransformerMixin):
     """Custom transformer for text embeddings"""
     def __init__(self, columns: List[str], model_name: str = "sentence-transformers/all-MiniLM-L6-v2",
@@ -131,3 +155,19 @@ class TextEmbeddings(BaseEstimator, TransformerMixin):
             embeddings = torch.mean(last_hidden_states, dim=1).cpu().tolist()
             all_embeddings.extend(embeddings)
         return all_embeddings
+
+
+class FillMissingValues(BaseEstimator, TransformerMixin):
+    """Custom transformer for filling missing values"""
+    def __init__(self, columns: List[str], fill_value: Any = None, fill_func: str = None):
+        self.columns = columns
+        if fill_value is None and fill_func is None:
+            raise ValueError("Either fill_value or fill_func must be provided.")
+        self.fill_value = fill_value
+        self.fill_func = fill_func
+
+    def transform(self, X: pd.DataFrame, y=None) -> pd.DataFrame:
+        for col in self.columns:
+            fill_value = getattr(X[col], self.fill_func)() if self.fill_value is None else self.fill_value
+            X[col].fillna(fill_value, inplace=True)
+        return X

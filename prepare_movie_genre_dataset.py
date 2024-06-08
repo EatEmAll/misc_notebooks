@@ -4,9 +4,10 @@ from argparse import ArgumentParser
 import pandas as pd
 from sklearn.pipeline import Pipeline
 import joblib
+from sklearn.preprocessing import StandardScaler
 
-from preprocessing_transformers import ParseJsonColumns, ConvertToLangCodes, CleanCountryNames, EncodeMultiLabel, \
-    TextEmbeddings
+from preprocessing import ParseJsonColumns, ConvertToLangCodes, CleanCountryNames, EncodeMultiLabel, \
+    TextEmbeddings, MultilabelUnderSampler, FillMissingValues
 
 if __name__ == '__main__':
     parser = ArgumentParser()
@@ -29,9 +30,12 @@ if __name__ == '__main__':
         ('parse_json', ParseJsonColumns(columns=['languages', 'genres', 'countries'])),
         ('convert_langcodes', ConvertToLangCodes()),
         ('clean_countries', CleanCountryNames()),
+        ('fill_numerical', FillMissingValues(['feature_length'], fill_func='median')),
+        ('text_embeddings', TextEmbeddings(['title', 'plot_summary'])),
         ('multilabel_X', EncodeMultiLabel(['langcodes', 'countries_parsed'], mca_components_ratio=.8)),
         ('multilabel_y', EncodeMultiLabel(['genres_parsed'])),
-        ('text_embeddings', TextEmbeddings())
+        ('balance_y', MultilabelUnderSampler(['genres_parsed'])),
+        ('scaler', StandardScaler()),
     ])
 
     # Fit and transform the data

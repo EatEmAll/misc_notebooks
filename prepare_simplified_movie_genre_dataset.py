@@ -5,9 +5,9 @@ from argparse import ArgumentParser
 import pandas as pd
 from sklearn.pipeline import Pipeline
 import joblib
+from sklearn.preprocessing import StandardScaler
 
-from preprocessing_transformers import EncodeMultiLabel, TextEmbeddings
-
+from preprocessing import EncodeMultiLabel, TextEmbeddings, MultilabelUnderSampler
 
 if __name__ == '__main__':
 
@@ -28,8 +28,10 @@ if __name__ == '__main__':
 
     # Pipeline for preprocessing
     preprocessing_pipeline = Pipeline(steps=[
+        ('text_embeddings', TextEmbeddings(['plot_summary'])),
         ('multilabel_y', EncodeMultiLabel(['genres_parsed'])),
-        ('text_embeddings', TextEmbeddings())
+        ('balance_y', MultilabelUnderSampler(['genres_parsed'])),
+        ('scaler', StandardScaler()),
     ])
 
     # Fit and transform the data
