@@ -42,7 +42,7 @@ if __name__ == '__main__':
         ('multilabel_y', EncodeMultiLabel(['genres_parsed'])),
         ('balance_y', MultilabelUnderSampler(cols_prefix='genres_parsed_')),
         ('np', Numpyfier()),
-        ('scaler', StandardScaler()),  #
+        ('scaler', StandardScaler()),
     ])
 
     # Fit and transform the data
@@ -66,6 +66,8 @@ if __name__ == '__main__':
     if data_pipe_dir:
         os.makedirs(data_pipe_dir, exist_ok=True)
     joblib.dump((data_pipe, data_pipe_inf), args.pipeline_path)
+    print(f'Processed data saved to {args.processed_data_path}')
+    print(f'Preprocessing pipeline saved to {args.pipeline_path}')
 
     # print(df_processed.info())
     # for col in df_processed.columns:

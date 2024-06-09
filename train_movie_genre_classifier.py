@@ -9,6 +9,7 @@ from sklearn.base import BaseEstimator
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import accuracy_score, f1_score, classification_report
 import torch
+from sklearn.multioutput import MultiOutputClassifier
 
 
 def load_data(file_path):
@@ -18,29 +19,25 @@ def load_data(file_path):
 def train_xgb_model(X_train: np.ndarray, y_train: np.ndarray, X_val: np.ndarray, y_val: np.ndarray, params: Dict,
                     fit_args: Dict = None) -> BaseEstimator:
     fit_args = fit_args or {}
+    # using XGBClassifier without MultiOutputClassifier due to MultiOutputClassifier nto supporting early stopping with eval_set
     model = xgb.XGBClassifier(**params)
-    X_train = xgb.DMatrix(X_train.values)
-    if isinstance(y_train, pd.DataFrame):
-        y_train = y_train.values
-    if isinstance(X_val, pd.DataFrame):
-        X_val = xgb.DMatrix(X_val.values)
-    if isinstance(y_val, pd.DataFrame):
-        y_val = y_val.values
-    # model.fit(X_train, y_train, eval_set=[(X_val, y_val)], eval_metric='mlogloss', early_stopping_rounds=10)
-    model.fit(X_train, y_train, eval_set=[(X_val, y_val)], **fit_args)
+    # model = MultiOutputClassifier(xgb.XGBClassifier(**params))
+    model.fit(X_train, y_train, eval_set=[(X_val, y_val)], **fit_args, verbose=1)
     return model
 
 
 def parse_arguments():
     parser = argparse.ArgumentParser(description='Train XGBoost model for movie genre classification')
-    parser.add_argument('--data_path', type=str, required=True, help='Path to the processed dataset')
-    parser.add_argument('--output_model_path', type=str, required=True, help='Path to save the trained model')
+    parser.add_argument('data_path', type=str, help='Path to the processed dataset')
+    parser.add_argument('output_model_path', type=str, help='Path to save the trained model')
     parser.add_argument('--test_size', type=float, default=0.2, help='Proportion of the dataset to include in the test split')
     parser.add_argument('--random_state', type=int, default=42, help='Random seed for train-test split')
-    parser.add_argument('--n_estimators', type=int, default=100, help='Number of trees in the forest')
+    parser.add_argument('--n_estimators', type=int, default=600, help='Number of trees in the forest')
     parser.add_argument('--max_depth', type=int, default=6, help='Maximum depth of the tree')
     parser.add_argument('--learning_rate', type=float, default=0.1, help='Learning rate')
     parser.add_argument('--subsample', type=float, default=0.8, help='Subsample ratio of the training instances')
+    parser.add_argument('--eval_metric', type=str, default='logloss', help='Evaluation metric')
+    parser.add_argument('--early_stopping_rounds', type=int, default=50, help='Number of rounds without improvements before stopping')
     return parser.parse_args()
 
 
@@ -68,21 +65,19 @@ if __name__ == '__main__':
         'learning_rate': args.learning_rate,
         'subsample': args.subsample,
         'objective': 'binary:logistic',
-        'eval_metric': 'logloss',
     }
-    if torch.cuda_is_available():
-        params.update({
-            'device': 'cuda',
-        })
+    if torch.cuda.is_available():
+        params.update({'device': 'cuda'})
 
     fit_args = {
-        'eval_metric': 'mlogloss',
-        'early_stopping_rounds': 10
+        'eval_metric': args.eval_metric,
+        'early_stopping_rounds': args.early_stopping_rounds
     }
     model = train_xgb_model(X_train, y_train, X_val, y_val, params, fit_args)
 
     # Save the trained model
     joblib.dump(model, args.output_model_path)
+    print(f'Model saved to {args.output_model_path}')
 
     # Evaluate the model
     y_pred = model.predict(X_val)

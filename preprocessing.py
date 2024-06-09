@@ -38,6 +38,8 @@ class ParseJsonColumns(BaseTransform):
     def transform(self, X: pd.DataFrame, y=None) -> pd.DataFrame:
         super().transform(X, y)
         for col in self.columns:
+            if col not in X.columns:
+                continue
             X[col] = X[col].fillna('{}')
             X[f'{col}_parsed'] = X[col].astype(str).apply(lambda x: list(eval(x).values()))
             X.drop(col, axis=1, inplace=True)
@@ -245,9 +247,17 @@ class Numpyfier(BaseTransform):
 
 def split_to_xy(data: np.array, columns: List[str], y_prefix: str) -> Tuple[np.array, np.array]:
     """Split the input data into features and target"""
-    y_cols_idx = [i for i, col in enumerate(columns) if col.startswith(y_prefix)]
+    # y_cols_idx = [i for i, col in enumerate(columns) if col.startswith(y_prefix)]
+    y_cols_idx, _ = get_y_cols(columns, y_prefix)
     y = data[:, y_cols_idx]
-    X_mask = np.ones(data.shape[1])
-    X_mask[y_cols_idx] = 0
+    X_mask = np.ones(data.shape[1], dtype=bool)
+    X_mask[y_cols_idx] = False
     X = data[:, X_mask]
     return X, y
+
+
+def get_y_cols(columns: List[str], y_prefix: str) -> Tuple[List[int], List[str]]:
+    y_prefix_len = len(y_prefix)
+    y_cols_pairs = [(i, col[y_prefix_len:]) for i, col in enumerate(columns) if col.startswith(y_prefix)]
+    idxs, y_cols = zip(*y_cols_pairs)
+    return list(idxs), list(y_cols)
