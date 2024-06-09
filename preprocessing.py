@@ -1,7 +1,8 @@
 import itertools
 import warnings
-from typing import List, Any
+from typing import List, Any, Tuple
 
+import numpy as np
 import pandas as pd
 from imblearn.under_sampling import RandomUnderSampler
 from sklearn.preprocessing import MultiLabelBinarizer
@@ -227,3 +228,26 @@ class StandardScalerPD(BaseTransform):
         super().transform(X, y)
         X[self.X_cols] = (X[self.X_cols] - self.mean_) / self.std_
         return X
+
+
+class Numpyfier(BaseTransform):
+    """Custom transformer for converting DataFrame to numpy array"""
+    def fit(self, X: pd.DataFrame, y=None):
+        super().fit(X, y)
+        self.index = X.index
+        self.columns = X.columns
+        return self
+
+    def transform(self, X: pd.DataFrame, y=None):
+        super().transform(X, y)
+        return X.values
+
+
+def split_to_xy(data: np.array, columns: List[str], y_prefix: str) -> Tuple[np.array, np.array]:
+    """Split the input data into features and target"""
+    y_cols_idx = [i for i, col in enumerate(columns) if col.startswith(y_prefix)]
+    y = data[:, y_cols_idx]
+    X_mask = np.ones(data.shape[1])
+    X_mask[y_cols_idx] = 0
+    X = data[:, X_mask]
+    return X, y

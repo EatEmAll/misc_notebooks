@@ -7,6 +7,9 @@ import joblib
 import torch
 from typing import List, Dict
 
+from sklearn.base import BaseEstimator
+from sklearn.pipeline import Pipeline
+
 # set manual seed for reproducibility
 SEED = 123
 np.random.seed(SEED)
@@ -14,7 +17,8 @@ torch.manual_seed(SEED)
 
 
 # Define the inference function
-def predict_movie_genres(movie_data: List[Dict[str, str]]) -> Dict[str, Dict[str, float]]:
+def predict_movie_genres(xgb_model: BaseEstimator, data_pipe: Pipeline, movie_data: List[Dict[str, float]]) ->\
+        Dict[str, Dict[str, float]]:
     """
     Preprocess the input data and predict movie genres with probabilities.
 
@@ -27,7 +31,7 @@ def predict_movie_genres(movie_data: List[Dict[str, str]]) -> Dict[str, Dict[str
     # Convert the input data to a DataFrame
     movie_data = pd.DataFrame(movie_data)
     # Preprocess the input data
-    processed_data = preprocessing_pipeline.transform(movie_data)
+    processed_data = data_pipe.transform(movie_data)
     # Convert processed_data to numpy array (if it's still a DataFrame)
     if isinstance(processed_data, pd.DataFrame):
         processed_data = processed_data.values
@@ -50,7 +54,7 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     # Load the preprocessing pipeline and the trained XGBoost model
-    preprocessing_pipeline = joblib.load(args.data_pipe_path)
+    data_pipe = joblib.load(args.data_pipe_path)
     xgb_model = joblib.load(args.model_path)
     if args.input:
         input_data = json.loads(args.input)
