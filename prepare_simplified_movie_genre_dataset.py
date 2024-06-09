@@ -6,7 +6,6 @@ from argparse import ArgumentParser
 import pandas as pd
 from sklearn.pipeline import Pipeline
 import joblib
-from sklearn.preprocessing import StandardScaler
 
 from preprocessing import EncodeMultiLabel, TextEmbeddings, MultilabelUnderSampler, ParseJsonColumns, StandardScalerPD
 
@@ -33,7 +32,7 @@ if __name__ == '__main__':
         ('text_embeddings', TextEmbeddings(['plot_summary'])),
         ('multilabel_y', EncodeMultiLabel(['genres_parsed'], mca_components_ratio=None)),  # encode y with one-hot without MCA
         ('balance_y', MultilabelUnderSampler(cols_prefix='genres_parsed_')),
-        ('scaler', StandardScalerPD()),
+        ('scaler', StandardScalerPD(y_cols_prefix='genres_parsed_')),
     ])
 
     # Fit and transform the data
