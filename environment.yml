@@ -1,0 +1,15 @@
+name: myenv
+channels:
+  - conda-forge
+  - pytorch
+dependencies:
+  - scikit-learn
+  - lightgbm
+  - langcodes
+  - prince
+  - xgboost
+  - imblearn
+  - scikit-multilearn
+  - transformers
+  - pytorch
+  - tqdm

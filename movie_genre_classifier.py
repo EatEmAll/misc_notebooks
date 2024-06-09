@@ -1,7 +1,7 @@
 #%%
 # TODO: add pip install command for all dependencies
 # install dependencies
-#!conda install -c conda-forge scikit-learn lightgbm langcodes prince xgboost imblearn skmultilearn transformers pytorch -y
+#!conda install -c conda-forge scikit-learn lightgbm langcodes prince xgboost imblearn scikit-multilearn transformers pytorch tqdm -y
 #%%
 # import dependencies
 import itertools
@@ -16,6 +16,7 @@ import pandas as pd
 from imblearn.under_sampling import RandomUnderSampler
 from imblearn.over_sampling import RandomOverSampler
 from sklearn.metrics import classification_report
+from sklearn.multioutput import MultiOutputClassifier
 from skmultilearn.problem_transform import LabelPowerset
 from lightgbm import LGBMClassifier
 from sklearn.ensemble import RandomForestClassifier
@@ -127,7 +128,9 @@ df.drop('languages_parsed', axis=1, inplace=True)
 # remove" Language" from countries_parsed values
 df['countries_parsed'] = df['countries_parsed'].apply(lambda x: [v.replace(' Language', '') for v in x])
 #%%
-cat_multi_cols = ['langcodes', 'countries_parsed', 'genres_parsed']
+cat_multi_cols_X = ['langcodes', 'countries_parsed']
+cat_multi_cols_y = ['genres_parsed']
+cat_multi_cols = cat_multi_cols_X + cat_multi_cols_y
 for col in cat_multi_cols:
     print(f'{col} unique values: {len(set(itertools.chain.from_iterable(df[col].values)))}')
 #%%
@@ -136,42 +139,43 @@ for col in cat_multi_cols:
 df_bak = df.copy()
 # df = df_bak.copy()
 n_features = df.shape[1]
-one_hot_cols = []
+one_hot_cols_X = []
 for col in cat_multi_cols:
     mlb = MultiLabelBinarizer()
     encoded_col = mlb.fit_transform(df[col])
     encoded_df = pd.DataFrame(encoded_col, columns=[f'{col}_{v}' for v in mlb.classes_], index=df.index)
-    one_hot_cols.extend(encoded_df.columns)
+    if col in cat_multi_cols_X:
+        one_hot_cols_X.extend(encoded_df.columns)
     df = pd.concat([df, encoded_df], axis=1)
     df.drop(col, axis=1, inplace=True)
 
 print(f'{df.shape=}, {df.shape[1] - n_features} new features added')
 #%%
-# find best number of components for MCA
-n_components_ratio_candidates = (.5, .7, .8, .9)
-n_components_candidates = [int(len(one_hot_cols)*ratio) for ratio in n_components_ratio_candidates]
-cumulative_eigenvalues = []
-for n_components in tqdm(n_components_candidates, desc='fitting MCA'):
-    mca = MCA(n_components=n_components)
-    mca.fit(df[one_hot_cols])
-    cumulative_eigenvalues.append(mca.eigenvalues_.sum())
-# plot cumulative eigenvalues
-plt.figure(figsize=(10, 5))
-plt.plot(n_components_ratio_candidates, cumulative_eigenvalues)
-plt.xlabel('n_components_ratio_candidates')
-plt.ylabel('cumulative_eigenvalues')
-plt.show()
+# # find best number of components for MCA
+# n_components_ratio_candidates = (.5, .7, .8, .9)
+# n_components_candidates = [int(len(one_hot_cols_X)*ratio) for ratio in n_components_ratio_candidates]
+# cumulative_eigenvalues = []
+# for n_components in tqdm(n_components_candidates, desc='fitting MCA'):
+#     mca = MCA(n_components=n_components)
+#     mca.fit(df[one_hot_cols_X])
+#     cumulative_eigenvalues.append(mca.eigenvalues_.sum())
+# # plot cumulative eigenvalues
+# plt.figure(figsize=(10, 5))
+# plt.plot(n_components_ratio_candidates, cumulative_eigenvalues)
+# plt.xlabel('n_components_ratio_candidates')
+# plt.ylabel('cumulative_eigenvalues')
+# plt.show()
 #%%
 # int(len(one_hot_cols)*.8) gives .95 of the explained variance
-n_components = int(len(one_hot_cols)*.8)
+n_components = int(len(one_hot_cols_X)*.8)
 mca = MCA(n_components=n_components)
-mca_df = mca.fit_transform(df[one_hot_cols])
+mca_df = mca.fit_transform(df[one_hot_cols_X])
 mca_df.columns = [f'mca_{i}' for i in range(n_components)]
 # replace one hot encoded columns with MCA columns
 df = pd.concat([df, mca_df], axis=1)
-df.drop(one_hot_cols, axis=1, inplace=True)
+df.drop(one_hot_cols_X, axis=1, inplace=True)
 #%%
-# TODO: handle numerical columns
+# handle numerical columns
 numerical_cols = df.select_dtypes(include='number').columns
 print((df[numerical_cols].isnull().sum() / df[numerical_cols].shape[0]))
 print(df[numerical_cols].describe())
@@ -190,6 +194,7 @@ embedding_size = model.config.hidden_size
 # Move model to GPU if available
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 model = model.to(device)
+
 
 def get_embeddings(texts: List[str], batch_size: int):
     all_embeddings = []
@@ -242,6 +247,9 @@ print({df[c].dtype for c in df.columns})
 # save the processed data
 df.to_csv('data/movie_data_processed.csv', index=False)
 #%%
+# # load the processed data
+# df = pd.read_csv('data/movie_data_processed.csv')
+#%%
 # split dataset
 df_shuffled = df.sample(frac=1, random_state=SEED)
 y_cols = df_shuffled.columns[df_shuffled.columns.str.startswith('genres_parsed_')]
@@ -276,7 +284,7 @@ rus = RandomUnderSampler(random_state=SEED)
 yt = lp.transform(y_train)
 X_resampled, y_resampled = rus.fit_resample(X_train, yt)
 # Inverts the ML-MC transformation to recreate the ML set
-y_resampled = lp.inverse_transform(y_resampled)
+y_resampled = lp.inverse_transform(y_resampled).toarray()
 #%%
 # build model evaluation function
 def val_model(X, y, clf, scoring, **cross_val_args):
@@ -320,60 +328,57 @@ micro_baseline = val_model(X_resampled, y_resampled, rf, scoring='recall_micro',
 #%%
 ### Compare models
 # instantiate the models
-rf   = RandomForestClassifier()
 knn  = KNeighborsClassifier()
 dt   = DecisionTreeClassifier()
 # models that don't support multilabel classification can be wrapped in OneVsRestClassifier
-sgdc = OneVsRestClassifier(SGDClassifier())
-svc  = OneVsRestClassifier(LinearSVC(multi_class='ovr'))
-lr   = OneVsRestClassifier(LogisticRegression())
-xgb  = XGBClassifier()
-lgbm = OneVsRestClassifier(LGBMClassifier())
-classifiers = [rf, knn, dt, sgdc, svc, lr, xgb, lgbm]
+sgdc = MultiOutputClassifier(SGDClassifier())
+svc  = MultiOutputClassifier(LinearSVC(multi_class='ovr'))
+lr   = MultiOutputClassifier(LogisticRegression())
+xgb  = XGBClassifier(objective='binary:logistic')
+multi_xgb = MultiOutputClassifier(XGBClassifier(objective='binary:logistic'))
+lgbm = MultiOutputClassifier(LGBMClassifier())
+classifiers = [knn, dt, sgdc, svc, lr, xgb, multi_xgb, lgbm]
+# classifiers = [sgdc, svc, lr, xgb, lgbm, rf, knn]
 # create lists to store:
 ## the classifier model
 # model = []
 ## the value of the Recall
-recall = []
+recall_results = {}
 
 # for practical reasons, we'll train on a subset of the data to reduce training time
 n_samples = 6000
 X_train_reduced, y_train_reduced = X_resampled[:n_samples], y_resampled[:n_samples]
+scoring_metric = 'recall_micro'
 
 # create loop to cycle through classification models
-# for clf in tqdm(classifiers):
-for clf in tqdm((sgdc, svc, lr, xgb, lgbm)):
-    # identify the classifier
-    # estimator = clf
-    # if isinstance(clf, OneVsRestClassifier):
-    #     estimator = clf.estimator
-    # model.append(estimator.__class__.__name__)
+for clf in tqdm(classifiers[:2]):
     # apply 'val_model' function and store the obtained Recall value
-    recall.append(val_model(X_train_reduced, y_train_reduced, clf, scoring='recall_micro'))
+    clf_recall = val_model(X_train_reduced, y_train_reduced, clf, scoring=scoring_metric)
+    recall_results[repr(clf)] = clf_recall
 
 # save the Recall result obtained in each classification model in a variable
-results = pd.DataFrame(data=recall, index=map(repr, classifiers), columns=['Recall'])
+results = pd.DataFrame(data=recall_results.values(), index=recall_results.keys(), columns=['Recall'])
 
 # show the models based on the Recall value obtained, from highest to lowest
 print(results.sort_values(by='Recall', ascending=False))
 #%%
-def xgb_hyperparam_search(X, y, param_grid, **xgb_args):
+def xgb_hyperparam_search(X, y, param_grid, scoring, **xgb_args):
     # set the learning rate to 0.1 and set the seed
-    xgb = XGBClassifier(**xgb_args)
+    # xgb = XGBClassifier(**xgb_args)
+    xgb = MultiOutputClassifier(XGBClassifier(objective='binary:logistic', **xgb_args))
+    param_grid_prefixed = {f"estimator__{key}": value for key, value in param_grid.items()}
     # set up cross validation with 5 stratified folds
-    # shuffle=True to shuffle the data before splitting and setting the seed
-    kfold = StratifiedKFold(shuffle=True, random_state=SEED)
     # configuring the search for cross matches with the XGBoost classifier
-    grid_search = GridSearchCV(xgb, param_grid, scoring="recall", n_jobs=-1, cv=kfold)
+    grid_search = GridSearchCV(xgb, param_grid_prefixed, scoring=scoring, n_jobs=-1, refit=True)
     grid_result = grid_search.fit(X, y)
     return grid_result.best_score_, grid_result.best_params_
 
 #%%
 # search n_estimators
-params_grid = {'n_estimators':range(0,500,50)}
+params_grid = {'n_estimators':range(25,150,25)}
 xgb_args = {'learning_rate':0.1, 'random_state':SEED}
-best_score, best_params = xgb_hyperparam_search(X_train_reduced, y_train_reduced, params_grid, **xgb_args)
-print(f'best params: {best_score=:.4f}, {best_params=:.4f}')
+best_score, best_params = xgb_hyperparam_search(X_train_reduced, y_train_reduced, params_grid, scoring_metric, **xgb_args)
+print(f'best params: {best_score=:.4f}, {best_params}')
 #%%
 # Extract the best n_estimators from the previous search
 best_n_estimators = best_params['n_estimators']
@@ -381,13 +386,13 @@ best_n_estimators = best_params['n_estimators']
 narrow_range_start = max(0, best_n_estimators - 25)
 narrow_range_end = best_n_estimators + 25
 params_grid = {'n_estimators': range(narrow_range_start, narrow_range_end, 5)}
-best_score, best_params = xgb_hyperparam_search(X_train_reduced, y_train_reduced, params_grid, **xgb_args)
+best_score, best_params = xgb_hyperparam_search(X_train_reduced, y_train_reduced, params_grid, scoring_metric, **xgb_args)
 print(f'Refined best params: {best_score=:.4f}, {best_params}')
 #%%
 # Search for max_depth and min_child_weight
 params_grid = {'max_depth': range(1, 8, 1),
                'min_child_weight': range(1, 5, 1)}
-best_score, best_params = xgb_hyperparam_search(X_train_reduced, y_train_reduced, params_grid, **xgb_args)
+best_score, best_params = xgb_hyperparam_search(X_train_reduced, y_train_reduced, params_grid, scoring_metric, **xgb_args)
 print(f'Final best params: {best_score=:.4f}, {best_params}')
 #%%
 # instantiate the model with the best hyperparameters
