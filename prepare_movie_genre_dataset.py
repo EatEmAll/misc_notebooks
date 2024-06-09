@@ -7,7 +7,7 @@ import joblib
 from sklearn.preprocessing import StandardScaler
 
 from preprocessing import ParseJsonColumns, ConvertToLangCodes, CleanCountryNames, EncodeMultiLabel, \
-    TextEmbeddings, MultilabelUnderSampler, FillMissingValues
+    TextEmbeddings, MultilabelUnderSampler, FillMissingValues, StandardScalerPD
 
 if __name__ == '__main__':
     parser = ArgumentParser()
@@ -35,7 +35,7 @@ if __name__ == '__main__':
         ('multilabel_X', EncodeMultiLabel(['langcodes', 'countries_parsed'], mca_components_ratio=.8)),
         ('multilabel_y', EncodeMultiLabel(['genres_parsed'])),
         ('balance_y', MultilabelUnderSampler(['genres_parsed'])),
-        ('scaler', StandardScaler()),
+        ('scaler', StandardScalerPD()),
     ])
 
     # Fit and transform the data

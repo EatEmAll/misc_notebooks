@@ -13,15 +13,24 @@ from transformers import AutoModel, AutoTokenizer
 import torch
 
 
-class ParseJsonColumns(BaseEstimator, TransformerMixin):
+class BaseTransform(BaseEstimator, TransformerMixin):
+    """Base class for custom transformers"""
+    def fit(self, X: pd.DataFrame, y=None):
+        print(f'Applying fit on {self.__class__.__name__}')
+        return self
+
+    def transform(self, X: pd.DataFrame, y=None) -> pd.DataFrame:
+        print(f'Applying transform on {self.__class__.__name__}')
+        return X
+
+
+class ParseJsonColumns(BaseTransform):
     """Custom transformer for parsing JSON columns"""
     def __init__(self, columns: List[str]):
         self.columns = columns
 
-    def fit(self, X: pd.DataFrame, y=None):
-        return self
-
     def transform(self, X: pd.DataFrame, y=None) -> pd.DataFrame:
+        super().transform(X, y)
         for col in self.columns:
             X[col] = X[col].fillna('{}')
             X[f'{col}_parsed'] = X[col].astype(str).apply(lambda x: list(eval(x).values()))
@@ -29,9 +38,10 @@ class ParseJsonColumns(BaseEstimator, TransformerMixin):
         return X
 
 
-class ConvertToLangCodes(BaseEstimator, TransformerMixin):
+class ConvertToLangCodes(BaseTransform):
     """Custom transformer for handling language codes"""
     def fit(self, X: pd.DataFrame, y=None):
+        super().fit(X, y)
         languages_unique_values = set(itertools.chain.from_iterable(X['languages_parsed'].values))
         self.langcode_map = {}
         for v in languages_unique_values:
@@ -42,23 +52,22 @@ class ConvertToLangCodes(BaseEstimator, TransformerMixin):
         return self
 
     def transform(self, X: pd.DataFrame, y=None) -> pd.DataFrame:
+        super().transform(X, y)
         X['langcodes'] = X['languages_parsed'].apply(
             lambda x: [(self.langcode_map[v].language if isinstance(self.langcode_map[v], langcodes.Language) else self.langcode_map[v]) for v in x])
         X.drop('languages_parsed', axis=1, inplace=True)
         return X
 
 
-class CleanCountryNames(BaseEstimator, TransformerMixin):
+class CleanCountryNames(BaseTransform):
     """Custom transformer for handling countries"""
-    def fit(self, X: pd.DataFrame, y=None):
-        return self
-
     def transform(self, X: pd.DataFrame, y=None) -> pd.DataFrame:
+        super().transform(X, y)
         X['countries_parsed'] = X['countries_parsed'].apply(lambda x: [v.replace(' Language', '') for v in x])
         return X
 
 
-class EncodeMultiLabel(BaseEstimator, TransformerMixin):
+class EncodeMultiLabel(BaseTransform):
     """
     Encode multilabel feature with one-hot apply dimensionality reduction using MCA.
     If mca_components_ratio is None, only one-hot encoding is applied.
@@ -68,6 +77,7 @@ class EncodeMultiLabel(BaseEstimator, TransformerMixin):
         self.mca_components_ratio = mca_components_ratio
 
     def fit(self, X: pd.DataFrame, y=None):
+        super().fit(X, y)
         self.mlb = MultiLabelBinarizer()
         self.one_hot_encoded_cols = []
         for col in self.columns:
@@ -82,6 +92,7 @@ class EncodeMultiLabel(BaseEstimator, TransformerMixin):
         return self
 
     def transform(self, X: pd.DataFrame, y=None) -> pd.DataFrame:
+        super().transform(X, y)
         for col in self.columns:
             encoded_col = self.mlb.transform(X[col])
             encoded_df = pd.DataFrame(encoded_col, columns=[f'{col}_{v}' for v in self.mlb.classes_])
@@ -96,7 +107,7 @@ class EncodeMultiLabel(BaseEstimator, TransformerMixin):
         return X
 
 
-class MultilabelUnderSampler(BaseEstimator, TransformerMixin):
+class MultilabelUnderSampler(BaseTransform):
     """Custom transformer for balancing multilabel data using under-sampling"""
     def __init__(self, columns: List[str] = (), cols_prefix: str = ''):
         if not (len(columns) > 0 or cols_prefix):
@@ -107,18 +118,23 @@ class MultilabelUnderSampler(BaseEstimator, TransformerMixin):
         self.rus = RandomUnderSampler()
 
     def fit(self, X: pd.DataFrame, y=None):
+        super().fit(X, y)
         if len(self.columns) == 0:
             self.columns = [col for col in X.columns if col.startswith(self.cols_prefix)]
+        return self
 
     def transform(self, X: pd.DataFrame, y=None) -> pd.DataFrame:
+        super().transform(X, y)
         y = X[self.columns]
         X = X.drop(self.columns, axis=1)
-        X_resampled, y_resampled = self.rus.fit_resample(X, y)
+        yt = self.lp.transform(y)
+        X_resampled, y_resampled = self.rus.fit_resample(X, yt)
         y_resampled = self.lp.inverse_transform(y_resampled).toarray()
+        y_resampled = pd.DataFrame(y_resampled, columns=self.columns, index=X_resampled.index, dtype=int)
         return pd.concat([X_resampled, y_resampled], axis=1)
 
 
-class TextEmbeddings(BaseEstimator, TransformerMixin):
+class TextEmbeddings(BaseTransform):
     """Custom transformer for text embeddings"""
     def __init__(self, columns: List[str], model_name: str = "sentence-transformers/all-MiniLM-L6-v2",
                  batch_size: int = 128):
@@ -130,11 +146,8 @@ class TextEmbeddings(BaseEstimator, TransformerMixin):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.model = self.model.to(self.device)
 
-    def fit(self, X: pd.DataFrame, y=None):
-        return self
-
     def transform(self, X: pd.DataFrame, y=None) -> pd.DataFrame:
-
+        super().transform(X, y)
         for col in self.columns:
             X[col].fillna('', inplace=True)
             X[f'{col}_embeddings'] = self.get_embeddings(X[col].values.tolist())
@@ -157,7 +170,7 @@ class TextEmbeddings(BaseEstimator, TransformerMixin):
         return all_embeddings
 
 
-class FillMissingValues(BaseEstimator, TransformerMixin):
+class FillMissingValues(BaseTransform):
     """Custom transformer for filling missing values"""
     def __init__(self, columns: List[str], fill_value: Any = None, fill_func: str = None):
         self.columns = columns
@@ -167,7 +180,22 @@ class FillMissingValues(BaseEstimator, TransformerMixin):
         self.fill_func = fill_func
 
     def transform(self, X: pd.DataFrame, y=None) -> pd.DataFrame:
+        super().transform(X, y)
         for col in self.columns:
             fill_value = getattr(X[col], self.fill_func)() if self.fill_value is None else self.fill_value
             X[col].fillna(fill_value, inplace=True)
+        return X
+
+
+class StandardScalerPD(BaseTransform):
+    """Custom transformer for standard scaling that returns a pandas DataFrame"""
+    def fit(self, X: pd.DataFrame, y=None):
+        super().fit(X, y)
+        self.mean_ = X.mean()
+        self.std_ = X.std()
+        return self
+
+    def transform(self, X: pd.DataFrame, y=None) -> pd.DataFrame:
+        super().transform(X, y)
+        X = (X - self.mean_) / self.std_
         return X

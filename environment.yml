@@ -1,8 +1,9 @@
-name: myenv
+name: movie_genre_demo
 channels:
   - conda-forge
   - pytorch
 dependencies:
+  - python=3.11
   - scikit-learn
   - lightgbm
   - langcodes
@@ -13,3 +14,4 @@ dependencies:
   - transformers
   - pytorch
   - tqdm
+  - joblib
